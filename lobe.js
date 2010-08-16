@@ -98,7 +98,8 @@ Listener.prototype.data = function(child,data) {
 // global singleton object to track server state
 var lobe = {
     children: {},
-    listeners: []
+    listeners: [],
+    parents: []
 };
 
 // Public
@@ -143,6 +144,12 @@ lobe.list = function(request,response,query) {
     response.end();
 }
 
+lobe.parent = function(request,response,query) {
+    query.lobe = this;
+    query.response = response;
+    this.parents.push(new Parent(query));
+}
+
 /*
   kill a controlled process
 
@@ -181,6 +188,11 @@ lobe.attach = function(request,response,query) {
 
 // Private
 
+lobe.parent_disconnected = function(parent) {
+    var i = this.parents.indexOf(parent);
+    if(i >= 0) this.parents.remove(i);
+}
+
 lobe.listener_disconnected = function(listener) {
     var i = this.listeners.indexOf(listener);
     if(i >= 0) this.listeners.remove(i);
@@ -193,7 +205,9 @@ lobe.exited = function(child) {
 }
 
 lobe.update_parent = function() {
-    // this.parent && this.parent.update(child);
+    for(i = 0; i < this.parents.length; i++) {
+        this.parents[i].updated(this);
+    }
 }
 
 lobe.data = function(child,data) {
@@ -213,27 +227,37 @@ lobe.error = function(response,reason) {
 }
 
 
-// function Probe(name,line) {
-//     this.name = (name && new RegExp(line));
-//     this.line = (line && new RegExp(line));
-// }
+function Probe(name,line) {
+    this.name = (name && new RegExp(line));
+    this.line = (line && new RegExp(line));
+}
 
-// Probe.prototype.match = function(data) {
-//     if(this.process_matcher === undefined ||  this.process_matcher.test(child.name))
-//         if(this.line_matcher === undefined ||  this.line_matcher.test(data))
-//             return(data)
-// }
+Probe.prototype.match = function(data) {
+    if(this.process_matcher === undefined ||  this.process_matcher.test(child.name))
+        if(this.line_matcher === undefined ||  this.line_matcher.test(data))
+            return(data)
+}
 
-// Super Lobe
+// Parent Lobe
 // pipe relays
 
-// function Super(lobe,response,args) {
-//     this.child = args.lobe;
-// }
+function Parent(args) {
+    this.lobe = args.lobe;
+    this.stream = new HTTPStream(args.response,this);
+}
 
-// Super.prototype.subscribe(name_matcher,line_matcher) {
-    
-// }
+Parent.prototype.disconnected = function () {
+    this.lobe.parent_disconnected(this);
+}
+
+// called when the children lobe changes its internal state
+Parent.prototype.updated = function () {
+    var names = [];
+    for(name in lobe.children)
+        names.push(name)
+    this.stream.write(sys.inspect(names)+"\n");
+}
+
 
 
 
