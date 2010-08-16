@@ -75,6 +75,38 @@ HTTPStream.prototype.checklive = function() {
     return true;
 }
 
+
+// HTTPStream (read)
+
+function HTTPStreamRead(callback,method,host,port,path) {
+    this.callback = callback;
+    this.client = http.createClient(port, host);
+    this.request = this.client.request('GET', '/parent', {'host': host});
+    this.request.end();
+    this.start();
+}
+
+HTTPStreamRead.prototype.start = function() {
+    var self = this;
+    this.request.on("response",function(response) {
+        response.setEncoding("utf8");
+        response.on("data", function(data) {
+            self.callback.data(data);
+        });
+        self.response = response;
+        self.checklive();
+    });
+}
+
+HTTPStreamRead.prototype.checklive = function() {
+    if(this.response.socket.readable == false) {
+        this.callback.disconnected();
+        return;
+    };
+    var self = this;
+    setTimeout(function() {self.checklive()},1000);
+}
+
 // Listener
 function Listener(args) {
     this.monitor = args.monitor;
@@ -143,10 +175,11 @@ lobe.list = function(request,response,query) {
     for(k in this.children) {
         response.write(this.children[k].name+"\n");
     };
-    for(i =0; i < this.lobes.length; i++) {
-        var names = this.lobes[i].names;
+    for(k in this.lobes) {
+        var lobe = this.lobes[k];
+        var names = lobe.names;
         for (j =0; j < names.length; j++) {
-            response.write(this.lobes[i].name+"/"+names[j]+"\n");
+            response.write(lobe.name+"/"+names[j]+"\n");
         }
     };
     response.end();
@@ -309,51 +342,21 @@ Parent.prototype.updated = function () {
 // Child Lobe
 
 function ChildLobe(args) {
-    this.host = args.host;
-    this.port = args.port;
-    this.name = args.name; // name of the attached child lobe
-    // this.client
-    // this.names // pipe names in the child lobe
-    
-    this.start();
+    this.reader = new HTTPStreamRead(this,"GET",args.host,args.port,"/parent");
+    this.name = args.name;
 }
 
 ChildLobe.prototype = {
-    start: function() {
-        var client = http.createClient(this.port, this.host);
-        var request = client.request('GET', '/parent', {'host': this.host});
-        request.end();
-        var self = this;
-        request.on("response",function(response) {
-            response.setEncoding("utf8");
-            response.on("data", function(data) {
-                self.update(data);
-            });
-            self.response = response;
-            self.checklive();
-        });
-        this.client = client;
-    },
-
     disconnected: function() {
         lobe.lobe_disconnected(this);
     },
     
     // update the list of names in the child lobe
-    update: function(data) {
+    data: function(data) {
         // i am just going to pretend i get one line of input each time...
         this.names = eval(data);
         // TODO propogate upward
     },
-    
-    checklive: function() {
-        if(this.response.socket.readable == false) {
-            this.disconnected();
-            return;
-        };
-        var self = this;
-        setTimeout(function() {self.checklive()},1000);
-    }
 }
 
 
