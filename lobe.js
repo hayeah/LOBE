@@ -43,42 +43,54 @@ Child.prototype.data = function(data) {
     this.monitor.data(this,data);
 }
 
-// Listener
-function Listener(args) {
-    this.monitor = args.monitor;
-    this.request = args.request;
-    this.response = args.response;
-    this.process_matcher = (args.name && new RegExp(args.name));
-    this.line_matcher = (args.grep && new RegExp(args.grep));
+// HTTPStream
+
+function HTTPStream(response,callback) {
+    this.response = response;
+    this.callback = callback;
     this.start();
 }
 
-Listener.prototype.start = function() {
+HTTPStream.prototype.write = function(data) {
+    this.response.write(data);
+}
+
+HTTPStream.prototype.start = function() {
     this.response.writeHead(200,{'Content-Type':'text/plain'});
     this.checklive();
+}
+
+HTTPStream.prototype.checklive = function() {
+    // ghetto way to detect that remote client is disconnected.
+    // // "close", "error", "end" events are not fired for response...
+    if(this.response.socket.writable == false) {
+        this.callback.disconnected();
+        this.response.end();
+        return;
+    }
+    var self = this;
+    setTimeout(function() {self.checklive()},500);
+    return true;
+}
+
+
+// Listener
+function Listener(args) {
+    this.monitor = args.monitor;
+    this.process_matcher = (args.name && new RegExp(args.name));
+    this.line_matcher = (args.grep && new RegExp(args.grep));
+    this.stream = new HTTPStream(args.response,this);
+}
+
+Listener.prototype.disconnected = function() {
+    this.monitor.listener_disconnected(this);
 }
 
 Listener.prototype.data = function(child,data) {
     // TODO match data against discriminators
     if(this.process_matcher === undefined ||  this.process_matcher.test(child.name))
         if(this.line_matcher === undefined ||  this.line_matcher.test(data))
-            this.response.write(data);
-}
-
-Listener.prototype.checklive = function() {
-    // ghetto way to detect that remote client is disconnected.
-    // // "close", "error", "end" events are not fired for response...
-    if(this.response.socket.writable == false) {
-        this.disconnected();
-        return;
-    }
-    var self = this;
-    setTimeout(function() {self.checklive()},1000);
-    return true;
-}
-
-Listener.prototype.disconnected = function() {
-    this.monitor.listener_disconnected(this);
+            this.stream.write(data);
 }
 
 // Lobe
@@ -112,8 +124,8 @@ lobe.spawn = function(request,response,query) {
         command: query.command
     });
     this.children[query.name] = child;
-    response.writeHead(200, {'Content-Type': 'text/plain'});
-    response.end(child.name);
+    this.update_parent();
+    this.ok(response,child.name);
 };
 
 /*
@@ -177,6 +189,11 @@ lobe.listener_disconnected = function(listener) {
 lobe.exited = function(child) {
     p(["exit",child]);
     delete this.children[child.name];
+    this.update_parent();
+}
+
+lobe.update_parent = function() {
+    // this.parent && this.parent.update(child);
 }
 
 lobe.data = function(child,data) {
@@ -194,6 +211,30 @@ lobe.error = function(response,reason) {
     response.writeHead(400, {'Content-Type': 'text/plain'});
     response.end(reason);
 }
+
+
+// function Probe(name,line) {
+//     this.name = (name && new RegExp(line));
+//     this.line = (line && new RegExp(line));
+// }
+
+// Probe.prototype.match = function(data) {
+//     if(this.process_matcher === undefined ||  this.process_matcher.test(child.name))
+//         if(this.line_matcher === undefined ||  this.line_matcher.test(data))
+//             return(data)
+// }
+
+// Super Lobe
+// pipe relays
+
+// function Super(lobe,response,args) {
+//     this.child = args.lobe;
+// }
+
+// Super.prototype.subscribe(name_matcher,line_matcher) {
+    
+// }
+
 
 
 
