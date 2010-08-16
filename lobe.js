@@ -43,7 +43,7 @@ Child.prototype.data = function(data) {
     this.monitor.data(this,data);
 }
 
-// HTTPStream
+// HTTPStream (write)
 
 function HTTPStream(response,callback) {
     this.response = response;
@@ -63,7 +63,9 @@ HTTPStream.prototype.start = function() {
 HTTPStream.prototype.checklive = function() {
     // ghetto way to detect that remote client is disconnected.
     // // "close", "error", "end" events are not fired for response...
-    if(this.response.socket.writable == false) {
+    var socket = this.response.socket;
+    // one or the other get set the false when connection is broken. But sometimes not both. (weird...)
+    if(socket.writable == false || socket.readable == false) {
         this.callback.disconnected();
         this.response.end();
         return;
@@ -72,7 +74,6 @@ HTTPStream.prototype.checklive = function() {
     setTimeout(function() {self.checklive()},500);
     return true;
 }
-
 
 // Listener
 function Listener(args) {
@@ -100,7 +101,7 @@ var lobe = {
     children: {},
     listeners: [],
     parents: [],
-    lobes: []
+    lobes: {}
 };
 
 // Public
@@ -174,10 +175,16 @@ lobe.parent = function(request,response,query) {
   host: the host:port of the child
   */
 lobe.child = function(request,response,query) {
+    // test for duplicate pipe name
+    if (this.lobes[query.name] !== undefined) {
+        this.error(response,"duplicate name: "+query.name);
+        return;
+    }
     var address = query.addr.split(":");
     query.host = address[0];
     query.port = address[1];
-    this.lobes.push(new ChildLobe(query));
+    this.lobes[query.name] = (new ChildLobe(query));
+    this.ok(response,query.name);
 }
 
 /*
@@ -218,12 +225,20 @@ lobe.attach = function(request,response,query) {
 
 // Private
 
+lobe.lobe_disconnected = function(lobe) {
+    p(["child lobe disconnected",lobe]);
+    delete this.lobes[lobe.name];
+    this.update_parent();
+}
+
 lobe.parent_disconnected = function(parent) {
+    p(["parent disconnected",parent]);
     var i = this.parents.indexOf(parent);
     if(i >= 0) this.parents.remove(i);
 }
 
 lobe.listener_disconnected = function(listener) {
+    p(["listener disconnected",listener]);
     var i = this.listeners.indexOf(listener);
     if(i >= 0) this.listeners.remove(i);
 }
@@ -271,7 +286,6 @@ Probe.prototype.match = function(data) {
 // Parent Lobe
 
 function Parent(args) {
-    this.lobe = args.lobe;
     this.stream = new HTTPStream(args.response,this);
     this.start();
 }
@@ -281,7 +295,7 @@ Parent.prototype.start = function() {
 }
 
 Parent.prototype.disconnected = function () {
-    this.lobe.parent_disconnected(this);
+    lobe.parent_disconnected(this);
 }
 
 // called when the children lobe changes its internal state
@@ -312,23 +326,33 @@ ChildLobe.prototype = {
         var self = this;
         request.on("response",function(response) {
             response.setEncoding("utf8");
-            // response.on("end", function(data) {
-            //     p("")
-            // });
             response.on("data", function(data) {
                 self.update(data);
             });
+            self.response = response;
+            self.checklive();
         });
         this.client = client;
     },
+
     disconnected: function() {
-        
+        lobe.lobe_disconnected(this);
     },
+    
     // update the list of names in the child lobe
     update: function(data) {
         // i am just going to pretend i get one line of input each time...
         this.names = eval(data);
         // TODO propogate upward
+    },
+    
+    checklive: function() {
+        if(this.response.socket.readable == false) {
+            this.disconnected();
+            return;
+        };
+        var self = this;
+        setTimeout(function() {self.checklive()},1000);
     }
 }
 
