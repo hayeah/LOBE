@@ -99,7 +99,8 @@ Listener.prototype.data = function(child,data) {
 var lobe = {
     children: {},
     listeners: [],
-    parents: []
+    parents: [],
+    lobes: []
 };
 
 // Public
@@ -138,16 +139,45 @@ lobe.spawn = function(request,response,query) {
   */
 lobe.list = function(request,response,query) {
     response.writeHead(200, {'Content-Type': 'text/plain'});
-    for (k in this.children) {
+    for(k in this.children) {
         response.write(this.children[k].name+"\n");
-    }
+    };
+    for(i =0; i < this.lobes.length; i++) {
+        var names = this.lobes[i].names;
+        for (j =0; j < names.length; j++) {
+            response.write(this.lobes[i].name+"/"+names[j]+"\n");
+        }
+    };
     response.end();
 }
 
+/*
+  INTERNAL
+  subscribe to the state updates of this lobe.
+  
+  Arguments
+  
+  none
+  */
 lobe.parent = function(request,response,query) {
     query.lobe = this;
     query.response = response;
     this.parents.push(new Parent(query));
+}
+
+/*
+  become the parent of a lobe.
+  
+  Arguments
+
+  name: give a name for the child
+  host: the host:port of the child
+  */
+lobe.child = function(request,response,query) {
+    var address = query.addr.split(":");
+    query.host = address[0];
+    query.port = address[1];
+    this.lobes.push(new ChildLobe(query));
 }
 
 /*
@@ -239,11 +269,15 @@ Probe.prototype.match = function(data) {
 }
 
 // Parent Lobe
-// pipe relays
 
 function Parent(args) {
     this.lobe = args.lobe;
     this.stream = new HTTPStream(args.response,this);
+    this.start();
+}
+
+Parent.prototype.start = function() {
+    this.updated();
 }
 
 Parent.prototype.disconnected = function () {
@@ -258,16 +292,53 @@ Parent.prototype.updated = function () {
     this.stream.write(sys.inspect(names)+"\n");
 }
 
+// Child Lobe
 
+function ChildLobe(args) {
+    this.host = args.host;
+    this.port = args.port;
+    this.name = args.name; // name of the attached child lobe
+    // this.client
+    // this.names // pipe names in the child lobe
+    
+    this.start();
+}
 
+ChildLobe.prototype = {
+    start: function() {
+        var client = http.createClient(this.port, this.host);
+        var request = client.request('GET', '/parent', {'host': this.host});
+        request.end();
+        var self = this;
+        request.on("response",function(response) {
+            response.setEncoding("utf8");
+            // response.on("end", function(data) {
+            //     p("")
+            // });
+            response.on("data", function(data) {
+                self.update(data);
+            });
+        });
+        this.client = client;
+    },
+    disconnected: function() {
+        
+    },
+    // update the list of names in the child lobe
+    update: function(data) {
+        // i am just going to pretend i get one line of input each time...
+        this.names = eval(data);
+        // TODO propogate upward
+    }
+}
 
 
 // HTTP Server
-
+var port = parseInt(process.argv[2] || "8124");
 http.createServer(function (request, response) {
     parse = url.parse(request.url,true);
     method = parse.pathname.slice(1);
     lobe[method](request,response,parse.query || {});
-}).listen(8124);
+}).listen(port);
 
-console.log('Server running at http://127.0.0.1:8124/');
+console.log('Server running at http://127.0.0.1:'+port);
