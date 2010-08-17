@@ -95,7 +95,7 @@ HTTPStream.prototype.checklive = function() {
 function HTTPStreamRead(callback,method,host,port,path) {
     this.callback = callback;
     this.client = http.createClient(port, host);
-    this.request = this.client.request('GET', '/parent', {'host': host});
+    this.request = this.client.request('GET', path, {'host': host});
     this.request.end();
     this.start();
 }
@@ -112,6 +112,11 @@ HTTPStreamRead.prototype.start = function() {
     });
 }
 
+HTTPStreamRead.prototype.close = function() {
+    // FIXME BROKEN grrrr. don't know how to force close a HTTP client response
+    // this.response.close();
+}
+
 HTTPStreamRead.prototype.checklive = function() {
     if(this.response.socket.readable == false) {
         this.callback.disconnected();
@@ -119,6 +124,29 @@ HTTPStreamRead.prototype.checklive = function() {
     };
     var self = this;
     setTimeout(function() {self.checklive()},1000);
+}
+
+function Relay(listener,sublobe,process,data) {
+    this.listener = listener;
+    
+    var query = {};
+    if(process) { query.process = process};
+    if(data) { query.data = data};
+    var path = "/attach?" + require('querystring').stringify(query);
+    p([this,"GET",sublobe.host,sublobe.port,path]);
+    this.reader = new HTTPStreamRead(this,"GET",sublobe.host,sublobe.port,path);
+}
+
+Relay.prototype = {
+    disconnected: function () {
+        this.listener.relay_disconnected(this);
+    },
+    data: function(data) {
+        this.listener.data(data);
+    },
+    close: function() {
+        this.reader.close();
+    }
 }
 
 // Listener
@@ -143,31 +171,28 @@ function Listener(lobe,response,node,process,data) {
             }
         }
     }
-    
-    // // subscribe to sublobes
-    // for(name in lobe.lobes) {
-    //     var lobe = lobe.lobes[name];
-    //     var self = this;
-    //     // ewww
-    //     var callback = function(lobe) {
-    //         return {
-    //             data: function(data) {
-    //                 self.data(lobe.name+"/")
-    //             }
-    //         };
-    //     }(lobe);
-    //     if(this.node && this.node.test(lobe.name)) {
-    //         new HTTPStreamRead()
-    //     }
-    // }
+
+    this.relays = [];
+    // subscribe to sublobes
+    for(name in lobe.lobes) {
+        var child = lobe.lobes[name];
+        if(!this.node_re || this.node_re.test(child.name)) {
+            p(["new relay"]);
+            this.relays.push(new Relay(this,child,process,data));
+        }
+    }
 }
 
 Listener.prototype.disconnected = function() {
     var self = this;
-    this.subscriptions.map(function(child) {
-        child.unsubscribe(self);
-    });
+    this.subscriptions.map(function(child) {child.unsubscribe(self);});
+    this.relays.map(function(relay) {relay.close()});
     this.lobe.listener_disconnected(this);
+}
+
+Listener.prototype.relay_disconnected = function(relay) {
+    var i = this.relays.indexOf(relay);
+    if(i >= 0) this.relays.remove(i);
 }
 
 Listener.prototype.data = function(data) {
@@ -297,7 +322,6 @@ lobe.state = function(request,response,query) {
   name: string
   */
 lobe.attach = function(request,response,query) {
-    // create a persistent HTTP connection
     this.listeners.push(new Listener(this,response,query.node,query.process,query.data));
 }
 
