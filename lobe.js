@@ -24,6 +24,7 @@ function Child(args) {
     this.name = args.name;
     this.monitor = args.monitor;
     this.pid = this.process.pid;
+    this.listeners = [];
     
     var self = this;
     this.process.stdout.on("data",function(data) {
@@ -39,8 +40,21 @@ Child.prototype.exited = function(code) {
     this.monitor.exited(this);
 }
 
+Child.prototype.subscribe = function(listener) {
+    this.listeners.push(listener);
+}
+
+Child.prototype.unsubscribe = function(listener) {
+    var i = this.listeners.indexOf(listener);
+    if(i >= 0) this.listeners.remove(i);
+}
+
 Child.prototype.data = function(data) {
-    this.monitor.data(this,data);
+    for(i = 0; i < this.listeners.length; i++) {
+        var listener = this.listeners[i];
+        if(!listener.data_re || listener.data_re.test(data))
+            listener.data(data);
+    }
 }
 
 // HTTPStream (write)
@@ -108,22 +122,56 @@ HTTPStreamRead.prototype.checklive = function() {
 }
 
 // Listener
-function Listener(args) {
-    this.monitor = args.monitor;
-    this.process_matcher = (args.name && new RegExp(args.name));
-    this.line_matcher = (args.grep && new RegExp(args.grep));
-    this.stream = new HTTPStream(args.response,this);
+function Listener(lobe,response,node,process,data) {
+    this.lobe = lobe;
+    // matchers
+    this.node_re = node && new RegExp(node);
+    this.process_re = process && new RegExp(process);
+    this.data_re = data && new RegExp(data);
+    
+    this.stream = new HTTPStream(response,this);
+
+    this.subscriptions = [];
+
+    // local process subscription
+    if(!this.node_re || this.node_re.test("local")) {
+        for(name in lobe.children) {
+            if(!this.process_re || this.process_re.test(name)) {
+                var child = lobe.children[name];
+                child.subscribe(this);
+                this.subscriptions.push(child);
+            }
+        }
+    }
+    
+    // // subscribe to sublobes
+    // for(name in lobe.lobes) {
+    //     var lobe = lobe.lobes[name];
+    //     var self = this;
+    //     // ewww
+    //     var callback = function(lobe) {
+    //         return {
+    //             data: function(data) {
+    //                 self.data(lobe.name+"/")
+    //             }
+    //         };
+    //     }(lobe);
+    //     if(this.node && this.node.test(lobe.name)) {
+    //         new HTTPStreamRead()
+    //     }
+    // }
 }
 
 Listener.prototype.disconnected = function() {
-    this.monitor.listener_disconnected(this);
+    var self = this;
+    this.subscriptions.map(function(child) {
+        child.unsubscribe(self);
+    });
+    this.lobe.listener_disconnected(this);
 }
 
-Listener.prototype.data = function(child,data) {
-    // TODO match data against discriminators
-    if(this.process_matcher === undefined ||  this.process_matcher.test(child.name))
-        if(this.line_matcher === undefined ||  this.line_matcher.test(data))
-            this.stream.write(data);
+Listener.prototype.data = function(data) {
+    this.stream.write(data);
 }
 
 // Lobe
@@ -250,10 +298,7 @@ lobe.state = function(request,response,query) {
   */
 lobe.attach = function(request,response,query) {
     // create a persistent HTTP connection
-    query.monitor = this;
-    query.response = response;
-    query.request = request;
-    this.listeners.push(new Listener(query));
+    this.listeners.push(new Listener(this,response,query.node,query.process,query.data));
 }
 
 // Private
@@ -288,12 +333,6 @@ lobe.update_parent = function() {
     }
 }
 
-lobe.data = function(child,data) {
-    for(i = 0; i < this.listeners.length; i++) {
-        this.listeners[i].data(child,data);
-    }
-}
-
 lobe.ok = function(response,result) {
     response.writeHead(200, {'Content-Type': 'text/plain'});
     response.end(result);
@@ -304,17 +343,6 @@ lobe.error = function(response,reason) {
     response.end(reason);
 }
 
-
-function Probe(name,line) {
-    this.name = (name && new RegExp(line));
-    this.line = (line && new RegExp(line));
-}
-
-Probe.prototype.match = function(data) {
-    if(this.process_matcher === undefined ||  this.process_matcher.test(child.name))
-        if(this.line_matcher === undefined ||  this.line_matcher.test(data))
-            return(data)
-}
 
 // Parent Lobe
 
@@ -343,6 +371,8 @@ Parent.prototype.updated = function () {
 
 function ChildLobe(args) {
     this.reader = new HTTPStreamRead(this,"GET",args.host,args.port,"/parent");
+    this.host = args.host;
+    this.port = args.port;
     this.name = args.name;
 }
 
